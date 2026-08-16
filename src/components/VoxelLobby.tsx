@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { VoxelRoomState, VoxelPlayer } from '../types/voxelGame';
 import { voxelNet } from '../multiplayer/voxelNet';
 import { voxelAudio } from '../game/audio/VoxelAudio';
@@ -11,7 +11,9 @@ import {
   Circle, 
   Palette, 
   LogOut, 
-  Layers 
+  Layers,
+  Sparkles,
+  Clock
 } from 'lucide-react';
 
 interface VoxelLobbyProps {
@@ -30,10 +32,42 @@ export const VoxelLobby: React.FC<VoxelLobbyProps> = ({
   onLeaveLobby
 }) => {
   const [copied, setCopied] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
 
   const playersList = Object.values(room.players || {});
   const myPlayerInRoom = room.players[localPlayer.id] || localPlayer;
   const isMeReady = !!myPlayerInRoom.isReady;
+
+  // Reliable host calculation
+  const isHost = (room.hostId === localPlayer.id) || (myPlayerInRoom && myPlayerInRoom.isHost) || (playersList.length === 1);
+
+  const allReady = playersList.length > 0 && playersList.every((p) => p.isReady);
+
+  // Auto-countdown when everyone is ready
+  useEffect(() => {
+    let timer: number | undefined;
+    if (allReady && room.phase === 'LOBBY') {
+      setCountdown(3);
+      let count = 3;
+      timer = window.setInterval(async () => {
+        count--;
+        setCountdown(count);
+        if (count <= 0) {
+          clearInterval(timer);
+          if (isHost) {
+            voxelAudio.playDaylightChime();
+            await voxelNet.startWorld(room.roomCode);
+          }
+        }
+      }, 1000);
+    } else {
+      setCountdown(null);
+    }
+
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [allReady, isHost, room.phase, room.roomCode]);
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(room.roomCode);
@@ -58,7 +92,6 @@ export const VoxelLobby: React.FC<VoxelLobbyProps> = ({
   };
 
   const handleStartWorld = async () => {
-    if (!localPlayer.isHost) return;
     voxelAudio.playDaylightChime();
     await voxelNet.startWorld(room.roomCode);
   };
@@ -87,6 +120,19 @@ export const VoxelLobby: React.FC<VoxelLobbyProps> = ({
         </div>
       </div>
 
+      {/* Readiness Status Banner */}
+      {allReady ? (
+        <div className="all-ready-banner">
+          <Sparkles className="icon-sm text-emerald" />
+          <span>ALL TRAVELERS ARE READY! {countdown !== null ? `ENTERING REALM IN ${countdown}s...` : 'STARTING...'}</span>
+        </div>
+      ) : (
+        <div className="waiting-ready-banner">
+          <Clock className="icon-sm text-amber" />
+          <span>Waiting for all players to click READY ({playersList.filter(p => p.isReady).length}/{playersList.length} ready)</span>
+        </div>
+      )}
+
       {/* Main Grid */}
       <div className="voxel-lobby-grid">
         {/* Left Column: Player List & Skin Color */}
@@ -97,22 +143,25 @@ export const VoxelLobby: React.FC<VoxelLobbyProps> = ({
           </div>
 
           <div className="players-scroll-roster">
-            {playersList.map((p) => (
-              <div key={p.id} className="player-roster-chip" style={{ borderLeftColor: p.color }}>
-                <div className="player-avatar-icon" style={{ backgroundColor: p.color }} />
-                <div className="player-name-block">
-                  <strong>{p.name} {p.id === localPlayer.id && '(YOU)'}</strong>
-                  {p.isHost && <span className="host-pill">HOST</span>}
+            {playersList.map((p) => {
+              const isThisPlayerHost = p.id === room.hostId || p.isHost;
+              return (
+                <div key={p.id} className="player-roster-chip" style={{ borderLeftColor: p.color }}>
+                  <div className="player-avatar-icon" style={{ backgroundColor: p.color }} />
+                  <div className="player-name-block">
+                    <strong>{p.name} {p.id === localPlayer.id && '(YOU)'}</strong>
+                    {isThisPlayerHost && <span className="host-pill">HOST</span>}
+                  </div>
+                  <div className="player-status-tag">
+                    {p.isReady ? (
+                      <span className="ready-text text-emerald"><CheckCircle className="icon-xs" /> READY</span>
+                    ) : (
+                      <span className="waiting-text text-slate"><Circle className="icon-xs" /> PREPARING</span>
+                    )}
+                  </div>
                 </div>
-                <div className="player-status-tag">
-                  {p.isReady ? (
-                    <span className="ready-text text-emerald"><CheckCircle className="icon-xs" /> READY</span>
-                  ) : (
-                    <span className="waiting-text text-slate"><Circle className="icon-xs" /> PREPARING</span>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Skin Color Picker */}
@@ -172,14 +221,15 @@ export const VoxelLobby: React.FC<VoxelLobbyProps> = ({
               {isMeReady ? 'READY TO EXPLORE ✓' : 'SET AS READY'}
             </button>
 
-            {localPlayer.isHost && (
+            {/* Launch Button for Host */}
+            {isHost && (
               <button
                 type="button"
                 onClick={handleStartWorld}
                 className="btn-launch-realm"
               >
                 <Play className="icon-sm" />
-                <span>ENTER REALM WORLD</span>
+                <span>START GAME NOW</span>
               </button>
             )}
           </div>

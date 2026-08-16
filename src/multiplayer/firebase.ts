@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
+import { getAuth, signInAnonymously } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDeUKwm5foGd8ZMsOOe1xooVXDWWJmCKzQ",
@@ -14,3 +15,9 @@ const firebaseConfig = {
 // Initialize Firebase safely
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app);
+export const auth = getAuth(app);
+
+// Authenticate anonymously in background
+signInAnonymously(auth).catch((err) => {
+  console.warn('Anonymous auth note:', err.message);
+});
