@@ -1,0 +1,27 @@
+{
+  "name": "abyss-expedition",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@types/three": "^0.185.4",
+    "clsx": "^2.1.1",
+    "firebase": "^12.17.1",
+    "lucide-react": "^1.16.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.3",
+    "vite": "^5.4.2"
+  }
+}
