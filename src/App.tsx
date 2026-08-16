@@ -1,207 +1,147 @@
-import React, { useState, useEffect } from 'react';
-import { UserProfile, RoomData, Player, OperationTarget } from './types/game';
-import { playerStore } from './progression/playerStore';
-import { roomManager } from './multiplayer/roomManager';
-import { OPERATIONS_LIST } from './data/operationsData';
-import { Navbar } from './components/Navbar';
+import { useState, useEffect } from 'react';
+import { BackroomsRoomState, BackroomsPlayer, HazmatColor } from './types/horrorGame';
+import { backroomsNet } from './multiplayer/backroomsNet';
+import { MainMenu } from './components/MainMenu';
 import { LobbyView } from './components/LobbyView';
-import { OperationsBoard } from './components/OperationsBoard';
-import { ActiveOperationView } from './components/ActiveOperationView';
-import { OperationResultsModal } from './components/OperationResultsModal';
-import { LoadoutView } from './components/LoadoutView';
-import { BlackMarketView } from './components/BlackMarketView';
-import { IntelArchiveView } from './components/IntelArchiveView';
-import { ProfileView } from './components/ProfileView';
+import { BackroomsGameCanvas } from './components/BackroomsGameCanvas';
+import { CodexView } from './components/CodexView';
 import { SettingsModal } from './components/SettingsModal';
-import './styles/global.css';
+import { spatialAudio } from './game/engine/SpatialAudio';
+import './styles/horror.css';
 
-export const App: React.FC = () => {
-  const [profile, setProfile] = useState<UserProfile>(playerStore.getProfile());
-  const [activeRoom, setActiveRoom] = useState<RoomData | null>(null);
-  const [currentView, setCurrentView] = useState<string>('operations');
-  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+export function App() {
+  const [currentView, setCurrentView] = useState<'MENU' | 'LOBBY' | 'GAME'>('MENU');
+  const [showCodex, setShowCodex] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
-  // Subscribe to persistent player store
-  useEffect(() => {
-    const unsub = playerStore.subscribe((p) => setProfile(p));
-    return unsub;
-  }, []);
-
-  // Parse URL search params for instant squad join (?join=XXXXXX)
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const joinCode = params.get('join');
-    if (joinCode && !activeRoom) {
-      handleJoinRoom(joinCode.toUpperCase());
-    }
-  }, []);
-
-  // Construct local player representation for multiplayer
-  const getLocalPlayer = (): Player => ({
-    id: profile.id,
-    name: profile.name,
-    avatar: profile.avatar,
-    title: profile.title,
-    level: profile.level,
-    rep: profile.rep,
-    role: 'operator',
-    isReady: false,
-    isHost: false,
-    lastPing: Date.now(),
-    selectedRigId: profile.equippedRig,
-    selectedTools: profile.equippedTools
+  // Local Operative Profile
+  const [localPlayer] = useState<BackroomsPlayer>(() => {
+    const savedName = localStorage.getItem('complex_player_name') || `OPERATIVE_${Math.floor(1000 + Math.random() * 9000)}`;
+    const savedColor = (localStorage.getItem('complex_player_color') as HazmatColor) || '#eab308';
+    return {
+      id: 'usr_' + Math.random().toString(36).substring(2, 9),
+      name: savedName,
+      color: savedColor,
+      isHost: false,
+      isReady: false,
+      isAlive: true,
+      x: 0,
+      y: 1.5,
+      z: 0,
+      yaw: 0,
+      pitch: 0,
+      flashlightOn: true,
+      currentLevel: 0,
+      health: 100,
+      sanity: 100,
+      battery: 100,
+      activeItem: 'flashlight',
+      lastPing: Date.now()
+    };
   });
 
-  // Create Room
-  const handleCreateRoom = async () => {
-    try {
-      const localP = getLocalPlayer();
-      const newRoom = await roomManager.createRoom(localP, OPERATIONS_LIST[0]);
-      setActiveRoom(newRoom);
-      setCurrentView('lobby');
-      subscribeToActiveRoom(newRoom.roomCode, localP.id);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to create room';
-      setErrorMessage(msg);
-    }
-  };
+  const [activeRoom, setActiveRoom] = useState<BackroomsRoomState | null>(null);
 
-  // Join Room
-  const handleJoinRoom = async (code: string) => {
-    try {
-      const localP = getLocalPlayer();
-      const res = await roomManager.joinRoom(code, localP);
-      if (!res.success) {
-        setErrorMessage(res.error || 'Could not connect to room');
-        return;
-      }
-      setActiveRoom(res.room || null);
-      setCurrentView('lobby');
-      subscribeToActiveRoom(code, localP.id);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Connection failed';
-      setErrorMessage(msg);
+  // Auto-join from URL parameter ?room=XXXXXX
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomCode = urlParams.get('room');
+    if (roomCode) {
+      handleJoinLobby(roomCode);
     }
-  };
+  }, []);
 
-  // Launch Solo Test
-  const handleStartSolo = async (target: OperationTarget) => {
-    try {
-      const localP = getLocalPlayer();
-      localP.isReady = true;
-      localP.isHost = true;
-      const soloRoom = await roomManager.createRoom(localP, target);
-      setActiveRoom(soloRoom);
-      subscribeToActiveRoom(soloRoom.roomCode, localP.id);
-      await roomManager.launchOperation(soloRoom.roomCode, target);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Solo launch error';
-      setErrorMessage(msg);
-    }
-  };
+  // Room synchronization subscription
+  useEffect(() => {
+    if (!activeRoom) return;
 
-  // Subscribe to real-time updates of active room
-  const subscribeToActiveRoom = (roomCode: string, playerId: string) => {
-    return roomManager.subscribeToRoom(
-      roomCode,
-      playerId,
+    const unsubscribe = backroomsNet.subscribeToRoom(
+      activeRoom.roomCode,
+      localPlayer.id,
       (updatedRoom) => {
         setActiveRoom(updatedRoom);
+        if (updatedRoom.phase === 'EXPLORATION' && currentView === 'LOBBY') {
+          setCurrentView('GAME');
+        } else if (updatedRoom.phase === 'LOBBY' && currentView === 'GAME') {
+          setCurrentView('LOBBY');
+        }
       },
       (err) => {
-        setErrorMessage(err);
+        console.warn('Room sync notice:', err);
       }
     );
+
+    return () => unsubscribe();
+  }, [activeRoom?.roomCode, currentView, localPlayer.id]);
+
+  // Actions
+  const handleStartSolo = async () => {
+    spatialAudio.init();
+    const soloRoom = await backroomsNet.createLobby({ ...localPlayer, isHost: true, isReady: true });
+    await backroomsNet.startExpedition(soloRoom.roomCode);
+    setActiveRoom(soloRoom);
+    setCurrentView('GAME');
   };
 
-  // Leave room
-  const handleLeaveRoom = async () => {
-    if (!activeRoom) return;
-    await roomManager.leaveRoom(activeRoom.roomCode, profile.id);
+  const handleCreateLobby = async () => {
+    spatialAudio.init();
+    const room = await backroomsNet.createLobby({ ...localPlayer, isHost: true, isReady: true });
+    setActiveRoom(room);
+    setCurrentView('LOBBY');
+  };
+
+  const handleJoinLobby = async (code: string) => {
+    spatialAudio.init();
+    const res = await backroomsNet.joinLobby(code, localPlayer);
+    if (res.success && res.room) {
+      setActiveRoom(res.room);
+      setCurrentView('LOBBY');
+    } else {
+      alert(res.error || 'Failed to join expedition party.');
+    }
+  };
+
+  const handleLeaveLobby = () => {
     setActiveRoom(null);
-    setCurrentView('operations');
+    setCurrentView('MENU');
   };
-
-  const localPlayer = activeRoom?.players[profile.id] || getLocalPlayer();
 
   return (
-    <div className="app-container">
-      {/* CRT Scanline Overlay */}
-      {profile.settings.crtEffect && <div className="crt-overlay" />}
-
-      {/* Main Navbar */}
-      <Navbar
-        profile={profile}
-        activeRoom={activeRoom}
-        activeView={currentView}
-        onNavigate={(v) => {
-          setErrorMessage(null);
-          setCurrentView(v);
-        }}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onLeaveRoom={handleLeaveRoom}
-      />
-
-      {/* Error Alert Banner */}
-      {errorMessage && (
-        <div className="system-error-banner">
-          <span>⚠️ {errorMessage}</span>
-          <button type="button" onClick={() => setErrorMessage(null)}>DISMISS</button>
-        </div>
-      )}
-
-      {/* Main Content Viewport */}
-      <main className="main-content-viewport">
-        {/* If Infiltration is active in the room */}
-        {activeRoom && (activeRoom.phase === 'INFILTRATION' || activeRoom.phase === 'RESULTS') ? (
-          <>
-            <ActiveOperationView room={activeRoom} localPlayer={localPlayer} />
-            {activeRoom.phase === 'RESULTS' && (
-              <OperationResultsModal room={activeRoom} localPlayer={localPlayer} />
-            )}
-          </>
-        ) : (
-          <>
-            {currentView === 'operations' && (
-              <OperationsBoard
-                profile={profile}
-                onLaunchOperation={(op) => {
-                  if (activeRoom && localPlayer.isHost) {
-                    roomManager.setSelectedOperation(activeRoom.roomCode, op);
-                    setCurrentView('lobby');
-                  } else {
-                    handleStartSolo(op);
-                  }
-                }}
-              />
-            )}
-
-            {currentView === 'lobby' && (
-              <LobbyView
-                room={activeRoom}
-                localPlayer={localPlayer}
-                onCreateRoom={handleCreateRoom}
-                onJoinRoom={handleJoinRoom}
-                onStartSolo={handleStartSolo}
-              />
-            )}
-
-            {currentView === 'loadout' && <LoadoutView profile={profile} />}
-            {currentView === 'market' && <BlackMarketView profile={profile} />}
-            {currentView === 'intel' && <IntelArchiveView profile={profile} />}
-            {currentView === 'profile' && <ProfileView profile={profile} />}
-          </>
-        )}
-      </main>
-
-      {/* Settings & Field Manual Modal */}
-      {isSettingsOpen && (
-        <SettingsModal
-          profile={profile}
-          onClose={() => setIsSettingsOpen(false)}
+    <div className="complex-app-root">
+      {/* 1. Main Menu */}
+      {currentView === 'MENU' && (
+        <MainMenu
+          onStartSolo={handleStartSolo}
+          onCreateLobby={handleCreateLobby}
+          onJoinLobby={handleJoinLobby}
+          onOpenCodex={() => setShowCodex(true)}
+          onOpenSettings={() => setShowSettings(true)}
         />
       )}
+
+      {/* 2. Squad Lobby */}
+      {currentView === 'LOBBY' && activeRoom && (
+        <LobbyView
+          room={activeRoom}
+          localPlayer={localPlayer}
+          onLeaveLobby={handleLeaveLobby}
+        />
+      )}
+
+      {/* 3. 3D Game Canvas */}
+      {currentView === 'GAME' && activeRoom && (
+        <BackroomsGameCanvas
+          room={activeRoom}
+          localPlayer={localPlayer}
+          onExitToMenu={handleLeaveLobby}
+        />
+      )}
+
+      {/* Modals */}
+      {showCodex && <CodexView onClose={() => setShowCodex(false)} />}
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </div>
   );
-};
+}
+
+export default App;
