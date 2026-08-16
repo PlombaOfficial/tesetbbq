@@ -9,6 +9,7 @@ import { spatialAudio } from '../game/engine/SpatialAudio';
 import { backroomsNet } from '../multiplayer/backroomsNet';
 import { HUD } from './HUD';
 import { SpectatorOverlay } from './SpectatorOverlay';
+import { MousePointer, Play } from 'lucide-react';
 
 interface BackroomsGameCanvasProps {
   room: BackroomsRoomState;
@@ -22,12 +23,14 @@ export const BackroomsGameCanvas: React.FC<BackroomsGameCanvasProps> = ({
   onExitToMenu
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const playerRef = useRef<PlayerController | null>(null);
   const [interactPrompt, setInteractPrompt] = useState<string | null>(null);
   const [sanityVal, setSanityVal] = useState<number>(100);
   const [healthVal, setHealthVal] = useState<number>(100);
   const [batteryVal, setBatteryVal] = useState<number>(100);
   const [staminaVal, setStaminaVal] = useState<number>(100);
   const [isDead, setIsDead] = useState<boolean>(false);
+  const [isPointerLocked, setIsPointerLocked] = useState<boolean>(false);
   const [inventoryState, setInventoryState] = useState<PlayerController['inventory']>({
     almondWaterCount: 1,
     batteryCount: 2,
@@ -56,11 +59,21 @@ export const BackroomsGameCanvas: React.FC<BackroomsGameCanvasProps> = ({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.domElement.style.display = 'block';
+    renderer.domElement.style.width = '100%';
+    renderer.domElement.style.height = '100%';
     containerRef.current.appendChild(renderer.domElement);
 
-    // Ambient Hemisphere light
-    const hemiLight = new THREE.HemisphereLight(levelDef.ambientColor, 0x080808, 0.4);
+    // Global Ambient Lighting for atmosphere
+    const ambientLight = new THREE.AmbientLight(0xfef08a, 0.45);
+    scene.add(ambientLight);
+
+    const hemiLight = new THREE.HemisphereLight(levelDef.ambientColor, 0x111827, 0.6);
     scene.add(hemiLight);
+
+    const dirLight = new THREE.DirectionalLight(0xfffbeb, 0.35);
+    dirLight.position.set(0, 15, 0);
+    scene.add(dirLight);
 
     // 2. Generate Seeded 3D Level Geometry
     const levelData: LevelGenerationResult = LevelGenerator.generate(levelDef, room.seed);
@@ -68,6 +81,7 @@ export const BackroomsGameCanvas: React.FC<BackroomsGameCanvasProps> = ({
 
     // 3. Initialize Local Player Controller
     const player = new PlayerController(camera, levelData.spawnPosition);
+    playerRef.current = player;
     scene.add(player.flashlight);
     scene.add(player.flashlightTarget);
 
@@ -119,15 +133,15 @@ export const BackroomsGameCanvas: React.FC<BackroomsGameCanvasProps> = ({
       return { group, light: spotLight };
     };
 
-    // 6. Interaction Raycaster
-    const raycaster = new THREE.Raycaster();
-    raycaster.far = 3.2;
+    // 6. Pointer Lock Listener
+    const handleLockChange = () => {
+      setIsPointerLocked(document.pointerLockElement === containerRef.current);
+    };
+    document.addEventListener('pointerlockchange', handleLockChange);
 
+    // Interaction Keyboard Listener
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'KeyE') {
-        // Interact action
-        raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-
         // Check if looking at elevator
         const distToElev = player.position.distanceTo(levelData.elevatorPosition);
         if (distToElev < 3.5) {
@@ -274,6 +288,7 @@ export const BackroomsGameCanvas: React.FC<BackroomsGameCanvasProps> = ({
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('pointerlockchange', handleLockChange);
       spatialAudio.stopAmbientDrone();
       if (containerRef.current && renderer.domElement) {
         containerRef.current.removeChild(renderer.domElement);
@@ -284,11 +299,34 @@ export const BackroomsGameCanvas: React.FC<BackroomsGameCanvasProps> = ({
 
   const handlePointerLockClick = () => {
     containerRef.current?.requestPointerLock();
+    playerRef.current?.requestPointerLock(containerRef.current!);
   };
 
   return (
     <div className="game-3d-wrapper" onClick={handlePointerLockClick}>
       <div ref={containerRef} className="webgl-canvas-container" />
+
+      {/* Start / Click to Look Overlay when not locked */}
+      {!isPointerLocked && !isDead && (
+        <div className="pointer-lock-prompt-overlay" onClick={handlePointerLockClick}>
+          <div className="pointer-lock-card">
+            <MousePointer className="icon-lg text-amber animate-bounce" />
+            <h2>CLICK TO ENTER THE COMPLEX</h2>
+            <p>Lock mouse to look around in full 3D & navigate.</p>
+            <div className="controls-hint-grid">
+              <div className="hint-pill"><kbd>W A S D</kbd> Move</div>
+              <div className="hint-pill"><kbd>MOUSE</kbd> Look Around</div>
+              <div className="hint-pill"><kbd>SHIFT</kbd> Sprint</div>
+              <div className="hint-pill"><kbd>F</kbd> Flashlight</div>
+              <div className="hint-pill"><kbd>E</kbd> Interact / Take</div>
+              <div className="hint-pill"><kbd>1 / 2</kbd> Drink / Battery</div>
+            </div>
+            <button type="button" className="btn-enter-complex">
+              <Play className="icon-xs" /> CLICK TO PLAY
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Found Footage HUD */}
       {!isDead ? (
@@ -302,8 +340,8 @@ export const BackroomsGameCanvas: React.FC<BackroomsGameCanvasProps> = ({
           interactPrompt={interactPrompt}
           radioMessages={room.radioMessages}
           roomCode={room.roomCode}
-          onDrinkAlmond={() => {}}
-          onReloadBattery={() => {}}
+          onDrinkAlmond={() => playerRef.current?.drinkAlmondWater()}
+          onReloadBattery={() => playerRef.current?.reloadBattery()}
         />
       ) : (
         <SpectatorOverlay

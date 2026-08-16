@@ -16,10 +16,15 @@ export function App() {
 
   // Local Operative Profile
   const [localPlayer] = useState<BackroomsPlayer>(() => {
+    let savedId = localStorage.getItem('complex_player_id');
+    if (!savedId) {
+      savedId = 'usr_' + Math.random().toString(36).substring(2, 9);
+      localStorage.setItem('complex_player_id', savedId);
+    }
     const savedName = localStorage.getItem('complex_player_name') || `OPERATIVE_${Math.floor(1000 + Math.random() * 9000)}`;
     const savedColor = (localStorage.getItem('complex_player_color') as HazmatColor) || '#eab308';
     return {
-      id: 'usr_' + Math.random().toString(36).substring(2, 9),
+      id: savedId,
       name: savedName,
       color: savedColor,
       isHost: false,

@@ -12,7 +12,8 @@ import {
   Circle, 
   Palette, 
   Layers, 
-  LogOut 
+  LogOut,
+  Edit3
 } from 'lucide-react';
 
 interface LobbyViewProps {
@@ -34,8 +35,12 @@ const HAZMAT_COLORS: Array<{ hex: HazmatColor; label: string }> = [
 export const LobbyView: React.FC<LobbyViewProps> = ({ room, localPlayer, onLeaveLobby }) => {
   const [copied, setCopied] = useState(false);
   const [selectedLevel, setSelectedLevel] = useState(room.currentLevel);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [customName, setCustomName] = useState(localPlayer.name);
 
   const playersList = Object.values(room.players || {});
+  const myPlayerInRoom = room.players[localPlayer.id] || localPlayer;
+  const isMeReady = !!myPlayerInRoom.isReady;
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(room.roomCode);
@@ -54,14 +59,25 @@ export const LobbyView: React.FC<LobbyViewProps> = ({ room, localPlayer, onLeave
 
   const handleToggleReady = async () => {
     spatialAudio.playFlashlightClick();
-    if (room.players[localPlayer.id]) {
-      room.players[localPlayer.id].isReady = !localPlayer.isReady;
-    }
+    const nextReady = !isMeReady;
+    localPlayer.isReady = nextReady;
+    await backroomsNet.setPlayerReady(room.roomCode, localPlayer.id, nextReady);
   };
 
-  const handleColorChange = (hex: HazmatColor) => {
+  const handleColorChange = async (hex: HazmatColor) => {
     localPlayer.color = hex;
+    localStorage.setItem('complex_player_color', hex);
     spatialAudio.playFlashlightClick();
+    await backroomsNet.setPlayerColor(room.roomCode, localPlayer.id, hex);
+  };
+
+  const handleSaveName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customName.trim()) return;
+    localPlayer.name = customName.trim();
+    localStorage.setItem('complex_player_name', customName.trim());
+    setIsEditingName(false);
+    await backroomsNet.setPlayerName(room.roomCode, localPlayer.id, customName.trim());
   };
 
   const handleStartGame = async () => {
@@ -105,6 +121,28 @@ export const LobbyView: React.FC<LobbyViewProps> = ({ room, localPlayer, onLeave
             <h3>EXPEDITION SQUAD ({playersList.length}/6)</h3>
           </div>
 
+          {/* Callsign Editor */}
+          <div className="callsign-editor-bar">
+            {isEditingName ? (
+              <form onSubmit={handleSaveName} className="name-edit-form">
+                <input
+                  type="text"
+                  value={customName}
+                  maxLength={16}
+                  onChange={(e) => setCustomName(e.target.value)}
+                  className="name-input"
+                  autoFocus
+                />
+                <button type="submit" className="btn-save-name">SAVE</button>
+              </form>
+            ) : (
+              <div className="name-display" onClick={() => setIsEditingName(true)}>
+                <span>OPERATIVE CALLSIGN: <strong>{localPlayer.name}</strong></span>
+                <Edit3 className="icon-xxs text-amber" />
+              </div>
+            )}
+          </div>
+
           <div className="players-list-scroll">
             {playersList.map((p) => (
               <div key={p.id} className="player-roster-row" style={{ borderLeftColor: p.color }}>
@@ -141,7 +179,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({ room, localPlayer, onLeave
                   key={c.hex}
                   type="button"
                   onClick={() => handleColorChange(c.hex)}
-                  className={`color-swatch-btn ${localPlayer.color === c.hex ? 'active-swatch' : ''}`}
+                  className={`color-swatch-btn ${myPlayerInRoom.color === c.hex ? 'active-swatch' : ''}`}
                   style={{ backgroundColor: c.hex }}
                   title={c.label}
                 />
@@ -207,9 +245,9 @@ export const LobbyView: React.FC<LobbyViewProps> = ({ room, localPlayer, onLeave
             <button
               type="button"
               onClick={handleToggleReady}
-              className={`btn-ready-toggle ${localPlayer.isReady ? 'ready-on' : 'ready-off'}`}
+              className={`btn-ready-toggle ${isMeReady ? 'ready-on' : 'ready-off'}`}
             >
-              {localPlayer.isReady ? 'READY TO DESCEND ✓' : 'SET AS READY'}
+              {isMeReady ? 'READY TO DESCEND ✓' : 'SET AS READY'}
             </button>
 
             {localPlayer.isHost && (

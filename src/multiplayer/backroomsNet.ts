@@ -10,6 +10,7 @@ import { db } from './firebase';
 import { 
   BackroomsRoomState, 
   BackroomsPlayer, 
+  HazmatColor, 
   RadioMessage, 
   WallMark 
 } from '../types/horrorGame';
@@ -151,7 +152,7 @@ export class BackroomsNetManager {
     }
   }
 
-  // Subscribe to Realtime Updates
+  // Subscribe to Realtime Updates with Ghost / Stale Player Filtering & Host Migration
   public subscribeToRoom(
     roomCode: string,
     localPlayerId: string,
@@ -182,19 +183,40 @@ export class BackroomsNetManager {
 
         const room = snapshot.data() as BackroomsRoomState;
 
+        // Clean stale ghost players (inactive > 30s) except local player
+        const activePlayers: Record<string, BackroomsPlayer> = {};
+        const now = Date.now();
+        let cleanedAny = false;
+
+        Object.entries(room.players || {}).forEach(([pId, p]) => {
+          if (pId === localPlayerId || (p.lastPing && now - p.lastPing < 30000)) {
+            activePlayers[pId] = p;
+          } else {
+            cleanedAny = true;
+          }
+        });
+
         // Host Migration check
-        const playerIds = Object.keys(room.players || {});
-        if (playerIds.length > 0 && (!room.players[room.hostId] || Date.now() - (room.players[room.hostId]?.lastPing || 0) > 40000)) {
+        const playerIds = Object.keys(activePlayers);
+        if (playerIds.length > 0 && (!activePlayers[room.hostId] || now - (activePlayers[room.hostId]?.lastPing || 0) > 30000)) {
           const newHostId = playerIds[0];
           if (newHostId === localPlayerId) {
             updateDoc(roomRef, {
               hostId: newHostId,
               [`players.${newHostId}.isHost`]: true,
+              players: activePlayers,
               lastUpdated: Date.now()
             }).catch(() => {});
           }
+        } else if (cleanedAny && room.hostId === localPlayerId) {
+          // If we are host, persist cleaned players list
+          updateDoc(roomRef, {
+            players: activePlayers,
+            lastUpdated: Date.now()
+          }).catch(() => {});
         }
 
+        room.players = activePlayers;
         onUpdate(room);
       }, () => {
         onError('Connection interrupted. Reconnecting...');
@@ -222,7 +244,7 @@ export class BackroomsNetManager {
           [`players.${playerId}.lastPing`]: Date.now()
         });
       } catch {}
-    }, 8000);
+    }, 5000);
   }
 
   private stopHeartbeat() {
@@ -230,6 +252,57 @@ export class BackroomsNetManager {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
     }
+  }
+
+  // Set Player Ready state (Synchronized to all players)
+  public async setPlayerReady(roomCode: string, playerId: string, isReady: boolean) {
+    if (this.isOfflineMode && this.localRoomState && this.localRoomState.players[playerId]) {
+      this.localRoomState.players[playerId].isReady = isReady;
+      return;
+    }
+
+    try {
+      const roomRef = doc(db, 'backrooms_rooms', roomCode);
+      await updateDoc(roomRef, {
+        [`players.${playerId}.isReady`]: isReady,
+        [`players.${playerId}.lastPing`]: Date.now(),
+        lastUpdated: Date.now()
+      });
+    } catch (err) {
+      console.warn('Failed to set ready:', err);
+    }
+  }
+
+  // Set Player Color
+  public async setPlayerColor(roomCode: string, playerId: string, color: HazmatColor) {
+    if (this.isOfflineMode && this.localRoomState && this.localRoomState.players[playerId]) {
+      this.localRoomState.players[playerId].color = color;
+      return;
+    }
+
+    try {
+      const roomRef = doc(db, 'backrooms_rooms', roomCode);
+      await updateDoc(roomRef, {
+        [`players.${playerId}.color`]: color,
+        lastUpdated: Date.now()
+      });
+    } catch {}
+  }
+
+  // Set Player Callsign Name
+  public async setPlayerName(roomCode: string, playerId: string, name: string) {
+    if (this.isOfflineMode && this.localRoomState && this.localRoomState.players[playerId]) {
+      this.localRoomState.players[playerId].name = name;
+      return;
+    }
+
+    try {
+      const roomRef = doc(db, 'backrooms_rooms', roomCode);
+      await updateDoc(roomRef, {
+        [`players.${playerId}.name`]: name,
+        lastUpdated: Date.now()
+      });
+    } catch {}
   }
 
   // Sync Player Movement Transform
